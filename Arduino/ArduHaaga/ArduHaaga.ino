@@ -260,7 +260,6 @@ void loop()
   digitalWrite(ledPin, LOW);
   Vector norm = compass.readNormalize();
   bool newdata = false;
-  checkEvent();
 
   dtMilli = millis() - lastMilli;                                             // calculate dt
   dtMillispeed = millis() - lastMillispeed;
@@ -269,7 +268,6 @@ void loop()
   // check command
   if (stringComplete)
   {
-    Serial.println(inputString);
     calculateRPM(inputString);
     inputString = "";
     stringComplete = false;
@@ -621,22 +619,6 @@ void calculateRPM(String command)
     }
     motor1_rpm_cmd = atoi(motor1_cmd.c_str());
     motor2_rpm_cmd = atoi(motor2_cmd.c_str());
-  }
-}
-
-void checkEvent() {
-  digitalWrite(ledPin, HIGH);
-  char character;
-  String string;
-  while (Serial.available()) {
-    character = Serial.read();
-    delay(10);
-    string.concat(character);
-  }
-  if (string != "") {
-    inputString = string;
-    stringComplete = true;
-    string = "";
   }
 }
 
