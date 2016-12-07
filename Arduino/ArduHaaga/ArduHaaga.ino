@@ -1,23 +1,23 @@
 #include <SoftwareSerial.h>
-#include <Wire.h>
 #include <TinyGPS.h>
+#include <Wire.h>
 #include <HMC5883L.h>
+
+// ROS
 #include <ros.h>
 #include <std_msgs/String.h>
 #include <rosserial_arduino/Test.h>
 
 //pin settings
-#define ledPin 13
-
 #define EN1             4                     // ENABLE pin motor1
 #define PWM1            5                     // PWM pin motor1
 #define EN2             6                     // ENABLE pin motor2
-#define PWM2            7                     // PWM pin motor2 
+#define PWM2            7                     // PWM pin motor2
 
-#define encodePinA1      19                       // encoder1 A pin
-#define encodePinB1      18                       // encoder1 B pin
-#define encodePinA2      3                       // encoder2 A pin
-#define encodePinB2      2                       // encoder2 B pin
+#define encodePinA1      18                       // encoder1 A pin  int4
+#define encodePinB1      19                       // encoder1 B pin  int5
+#define encodePinA2      3                       // encoder2 A pin  int1
+#define encodePinB2      2                       // encoder2 B pin  int0
 
 #define GPSTX 10
 #define GPSRX 11
@@ -25,6 +25,7 @@
 #define GYROSDA 20
 #define GYROSCL 21
 
+// for PID controll
 #define Gearratio1      12                      //motor1 gear ratio
 #define Encoderpulse1   48*4                    //motor1 encoder pulse
 #define Gearratio2      12                      //motor2 gear ratio
@@ -40,10 +41,11 @@ int motor1_rpm_cmd = 0;
 int motor2_rpm_cmd = 0;
 
 unsigned long lastMilli = 0;                    // loop timing
-unsigned long lastMillimonitor = 0;             // loop timing
-unsigned long lastMilliPrint = 0;               // loop timing
-unsigned long dtMilli = 0;
-unsigned long dtMillimonitor = 100;             // Communication period
+unsigned long lastMillimonitor = 0;
+unsigned long lastMilliPrint = 0;
+
+unsigned long dtMilli = 0;                     // Communication period
+unsigned long dtMillimonitor = 50;
 unsigned long dtMillispeed = 0;
 unsigned long lastMillispeed = 0;
 
@@ -89,15 +91,15 @@ int Precount2[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // motor 2 last count
 long newpre1 = 0;
 long newpre2 = 0;
 
-float Kp1 = 0.57;                                // motor1 PID proportional control Gain
-float Ki1 = 2.77;                                // motor1 PID Integral control Gain
-float Kd1 = 0.88;                                // motor1 PID Derivitave control Gain
-float Ka1 = 3.25;
+float Kp1 =   0.57;                                // motor1 PID proportional control Gain
+float Ki1 =  2.77;                                  // motor1 PID Integral control Gain
+float Kd1 =   0.88;                               // motor1 PID Derivitave control Gain
+float Ka1 =   3.25;
 
-float Kp2 = 0.57;                                // motor2 PID proportional control Gain
-float Ki2 = 2.77;                                // motor2 PID Derivitave control Gain
-float Kd2 = 0.88;                                // motor2 PID Integral control Gain
-float Ka2 = 3.25;
+float Kp2 =   0.57;                                // motor2 PID proportional control Gain
+float Ki2 =   2.77;// 7.5;                                // motor2 PID Derivitave control Gain
+float Kd2 = 0.88;//4.05;                                   // motor2 PID Integral control Gain
+float Ka2 =  3.25;//0.2;
 
 float controll_inc = 1;
 float controll_inc_i = 0.01;
@@ -129,14 +131,14 @@ float enc_prev1 = 0;
 float enc_prev2 = 0;
 
 String inputString = "";
-boolean stringComplete = false;
+int stringComplete = 0;
 
 //for GPS data
 SoftwareSerial mySerial(GPSTX, GPSRX); // TX, RX        //GPS functions
 TinyGPS gps;
 int gpsdata = 0;
 float flat, flon;
-unsigned long lastMilliGPS = 0;                   // loop timing
+unsigned long lastMilliGPS = 0;               // loop timing
 unsigned long dtMilliGPS = 0;
 uint8_t gps_config_change[63] = {
   0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, 0xFA, 0x00, 0x01, 0x00, 0x01, 0x00,
@@ -150,25 +152,23 @@ uint8_t gps_config_change[63] = {
   0xB5, 0x62, 0x06, 0x09, 0x0D, 0x00, 0x00, 0x00,
   0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x1D, 0xAB
 };
-void gpsdump(TinyGPS &gps);
 
+void gpsdump(TinyGPS &gps);
+void printFloat(double f, int digits = 2);
 
 //for GYRO data
 HMC5883L compass;
 int compassdata = 0;
 float headingDegrees = 0.0;
 
-// mode 1=manual 0,=auto
-int mode = 0;
-
 //ROS
 ros::NodeHandle  nh;
 using rosserial_arduino::Test;
 std_msgs::String status_msg;
-ros::Publisher chatter("motor_status", &status_msg);
+ros::Publisher chatter("motor_status", &status_msg); // arduino -> ros
 void callback(const Test::Request & req, Test::Response & res)
 {
-  inputString = req.input;
+  inputString = req.input; // ros -> arduino
   res.output = req.input;
   stringComplete = true;
 }
@@ -180,9 +180,9 @@ void setup()
 {
   analogReference(DEFAULT);                            //Reference 5V (Mega condition)
 
-  Serial.begin(57600);                               //Monitoring & Command serial
-  // set the data rate for the GPS port
-  mySerial.begin(9600);
+  Serial.begin(57600);                               // Monitoring & command port
+  //mySerial.begin(57600);
+  // set the data rate for the SoftwareSerial port
   mySerial.begin(9600);                              // Set GPS baudrate 115200 from 9600
   mySerial.write(gps_config_change, sizeof(gps_config_change));
   mySerial.end();
@@ -205,8 +205,8 @@ void setup()
 
   attachInterrupt(5, rencoder1, CHANGE);               //Encoder pin interrupt setting
   attachInterrupt(4, rencoder1, CHANGE);
-  attachInterrupt(3, rencoder2, CHANGE);
-  attachInterrupt(2, rencoder2, CHANGE);
+  attachInterrupt(1, rencoder2, CHANGE);
+  attachInterrupt(0, rencoder2, CHANGE);
 
   analogWrite(PWM1, PWM_val1);
   analogWrite(PWM2, PWM_val2);
@@ -229,7 +229,6 @@ void setup()
   nh.advertise(chatter);
   nh.advertiseService(server);
 }
-
 // LPF filter setup
 float LPFVAR = 0.08;
 float lpFilter(float value, float prev_value, float beta)
@@ -257,9 +256,8 @@ int term = 0;
 
 void loop()
 {
-  digitalWrite(ledPin, LOW);
   Vector norm = compass.readNormalize();
-  bool newdata = false;
+  checkEvent();
 
   dtMilli = millis() - lastMilli;                                             // calculate dt
   dtMillispeed = millis() - lastMillispeed;
@@ -270,7 +268,7 @@ void loop()
   {
     calculateRPM(inputString);
     inputString = "";
-    stringComplete = false;
+    stringComplete = 0;
     if ( motor1_rpm_cmd > 320)
       speed_req1 = 320;
     else if ( motor1_rpm_cmd < -320)
@@ -286,7 +284,7 @@ void loop()
       speed_req2 = motor2_rpm_cmd;
   }
 
-  //////////////////////////////////////////////////////// MOTOR CONTROLL
+
 
   if (dtMillispeed >= LOOPTIMEVEL)
   {
@@ -331,22 +329,35 @@ void loop()
     {
       digitalWrite(EN2, LOW);
     }
-
+    if (speed_req1 == 0 && abs(error1) == 0)
+      PWM_val1 = 0;
+    if (speed_req2 == 0 && abs(error2) == 0)
+      PWM_val2 = 0;
 
     analogWrite(PWM1, abs(PWM_val1));                                               // send PWM to motor
     analogWrite(PWM2, abs(PWM_val2));                                               // send PWM to motor
 
+    //    if (manual == 0)
+    //      printMotorInfo();
+    //    else if (manual == 1)
+    //    {
+    //
+    //    }
+    //printMotorInfo();
+
+    //countpush(Precount1,count1,Precount1);
+    //countpush(Precount2,count2,Precount2);
 
     lastMilli = millis();
   }
 
-
-  // Every 2 seconds update GPS
-  if (dtMilliGPS >= LOOPTIMEGPS)
-  {
-    if (mySerial.available())
+  // GPS update
+    bool newdata = false;
+    unsigned long start = millis();
+    while (millis() - start < 10) {
+    if (Serial3.available())
     {
-      char c = mySerial.read();
+      char c = Serial3.read();
       //Serial.print(c);  // uncomment to see raw GPS data
       if (gps.encode(c))
       {
@@ -355,19 +366,19 @@ void loop()
         // break;  // uncomment to print new data immediately!
       }
     }
-    lastMilliGPS = millis();
-  }
-  if (newdata)
-  {
+    }
+    if (newdata)
+    {
     gpsdump(gps);
-  }
-  else
+    }
+    else
     gpsdata = 0;
 
-  // Calculate heading
+  //Calculate heading
   float heading = atan2(norm.YAxis, norm.XAxis);
-  float declinationAngle = (8.0 + (21.0 / 60.0)) / (180 / M_PI);  
-                          // Formula: (deg + (min / 60.0)) / (180 / M_PI);
+  float declinationAngle = (11.0 + (49.0 / 60.0)) / (180 / M_PI);
+               // Formula: (deg + (min / 60.0)) / (180 / M_PI);
+
   heading += declinationAngle;
   // Correct for heading < 0deg and heading > 360deg
   if (heading < 0)
@@ -380,12 +391,13 @@ void loop()
   }
   headingDegrees = heading * 180 / M_PI; // Convert to degrees
 
-
-  // Publish motor status
+  
   publishStatus();
   nh.spinOnce();
 }
 
+
+// Publish message to ROS
 void publishStatus()
 {
   if ((millis() - lastMilliPrint) >= dtMillimonitor)
@@ -415,6 +427,7 @@ void publishStatus()
     message[0] = '\0';
   }
 }
+
 
 void speedcalculation(unsigned long dt)  // calculate speed, volts and Amps
 {
@@ -506,17 +519,91 @@ float updatePid2( float targetValue, float currentValue, unsigned long dt, float
   return pidTerm_sat;
 }
 
+/*
+void printMotorInfo()                                                        // display data
+{
+  if ((millis() - lastMilliPrint) >= dtMillimonitor)   {
+    lastMilliPrint = millis();
+
+    Serial.print(speed_act1_rpm); Serial.print(",");
+    Serial.print(speed_act1_filtered); Serial.print(",");
+    Serial.print(speed_req1); Serial.print(",");
+    Serial.print(PWM_val1); Serial.print(",");
+    Serial.print(count1); Serial.print(",");
+    Serial.print(error1); Serial.print(",");
+    Serial.print(pid_i1); Serial.print(",");
+    Serial.print(pid_d1); Serial.print(",");
+    Serial.print(Kp1); Serial.print(",");
+    Serial.print(Ki1); Serial.print(",");
+    Serial.print(Kd1); Serial.print(",");
+    Serial.print(Ka1); Serial.print(",");
+    Serial.print(inc_enc_pos1); Serial.print(",");
+    Serial.print(speed_profile1); Serial.print(",");
+
+    Serial.print(speed_act2_rpm); Serial.print(",");
+    Serial.print(speed_act2_filtered); Serial.print(",");
+    Serial.print(speed_req2); Serial.print(",");
+    Serial.print(PWM_val2); Serial.print(",");
+    Serial.print(count2); Serial.print(",");
+    Serial.print(error2); Serial.print(",");
+    Serial.print(pid_i2); Serial.print(",");
+    Serial.print(pid_d2); Serial.print(",");
+    Serial.print(Kp2); Serial.print(",");
+    Serial.print(Ki2); Serial.print(",");
+    Serial.print(Kd2); Serial.print(",");
+    Serial.print(Ka2); Serial.print(",");
+    Serial.print(inc_enc_pos2); Serial.print(",");
+    Serial.print(speed_profile2); Serial.print(",");
+
+    Serial.print(LPFVAR); Serial.print(",");
+
+    Serial.print(gpsdata); Serial.print(",");
+    printFloat(flat, 6); Serial.print(",");      //Serial.print(flat); Serial.print(",");
+    printFloat(flon, 6); Serial.print(",");      //Serial.print(flon); Serial.print(",");
+
+    Serial.print(compassdata); Serial.print(",");
+    Serial.print(headingDegrees); Serial.print(",");
+
+    Serial.print(stringComplete); Serial.print(",");
+
+    Serial.print("\n");
+  }
+}
+*/
+
+//countpush for speed calculation
+int countpush(int stack[10], int item, int tempstack[10])
+{
+
+  for (int i = 0; i < 9 ; i++)
+  {
+    tempstack[i] = stack[i + 1];
+  }
+  tempstack[9] = item;
+
+}
 
 void calculateRPM(String command)
 {
-  char charInput[10];
+  char charInput[255];
   String motor1_cmd, motor2_cmd;
   String motor1_distance;
 
   int pos_R, pos_L, pos_E, pos_D;
   sprintf(charInput, "%s", command.c_str());
 
- if (strchr(charInput, 'p') - charInput == 0)
+  if (strchr(charInput, 'b') - charInput == 0)
+  {
+    if (strchr(charInput, '+') - charInput == 1)
+    {
+      LPFVAR = LPFVAR + 0.001;
+    }
+    else if (strchr(charInput, '-') - charInput == 1)
+    {
+      LPFVAR = LPFVAR - 0.001;
+    }
+  }
+  else if (strchr(charInput, 'p') - charInput == 0)
   {
     if (strchr(charInput, '+') - charInput == 1)
     {
@@ -604,8 +691,53 @@ void calculateRPM(String command)
       Ka2 -= controll_inc_i;
     }
   }
-  
-  else {
+  else if (strchr(charInput, 'w') - charInput == 0)
+  {
+    if (strchr(charInput, '+') - charInput == 1)
+    {
+      motor1_rpm_cmd += speed_term;
+      motor2_rpm_cmd += speed_term;
+    }
+  }
+  else if (strchr(charInput, 's') - charInput == 0)
+  {
+    if (strchr(charInput, '-') - charInput == 1)
+    {
+      motor1_rpm_cmd -= speed_term;
+      motor2_rpm_cmd -= speed_term;
+    }
+  }
+  else if (strchr(charInput, 'm') - charInput == 0)
+  {
+    if (strchr(charInput, '*') - charInput == 1)
+    {
+      PWM_val1 = 0;
+      speed_req1 = 0;
+      PWM_val2 = 0;
+      speed_req2 = 0;
+      error1 = 0;
+      error2 = 0;
+      Kp1 = 0; Ki1 = 0; Kd1 = 0;
+      Kp2 = 0; Ki2 = 0; Kd2 = 0;
+    }
+    else if (strchr(charInput, '+') - charInput == 1)
+    {
+      inc_enc_pos1 = 0;
+    }
+  }
+  else if (strchr(charInput, 'M') - charInput == 0)
+  {
+    if (strchr(charInput, '+') - charInput == 1)    //Set bluetooth
+    {
+      manual = 1;
+    }
+    else if (strchr(charInput, '-') - charInput == 1)  //Set automatic
+    {
+      manual = 0;
+    }
+  }
+  else
+  {
     pos_R = (strchr(charInput, 'R') - charInput);
     pos_L = (strchr(charInput, 'L') - charInput);
     pos_E = (strchr(charInput, 'E') - charInput);
@@ -622,7 +754,23 @@ void calculateRPM(String command)
   }
 }
 
-void gpsdump(TinyGPS &gps)
+void checkEvent() {
+  while (Serial.available())
+  {
+    char inChar = (char)Serial.read();
+
+    inputString += inChar;
+    if (inChar == 'E')
+    {
+      stringComplete = 1;
+      if (manual == 1)
+        Serial.print(inputString);
+    }
+
+  }
+}
+
+void gpsdump(TinyGPS & gps)
 {
   long lat, lon;
   // float flat, flon;
@@ -631,10 +779,8 @@ void gpsdump(TinyGPS &gps)
   byte month, day, hour, minute, second, hundredths;
   unsigned short sentences, failed;
 
-  
   gps.f_get_position(&flat, &flon, &age);
- }
-
+}
 
 //count from quad encoder
 
@@ -667,4 +813,37 @@ void rencoder2()  // pulse and direction, direct port reading to save cycles
   }
   oldencodePinB2 = digitalRead(encodePinB2);
 }
+void printFloat(double number, int digits)
+{
+  // Handle negative numbers
+  if (number < 0.0) {
+    Serial.print('-');
+    number = -number;
+  }
+
+  // Round correctly so that print(1.999, 2) prints as "2.00"
+  double rounding = 0.5;
+  for (uint8_t i = 0; i < digits; ++i)
+    rounding /= 10.0;
+
+  number += rounding;
+
+  // Extract the integer part of the number and print it
+  unsigned long int_part = (unsigned long)number;
+  double remainder = number - (double)int_part;
+  Serial.print(int_part);
+
+  // Print the decimal point, but only if there are digits beyond
+  if (digits > 0)
+    Serial.print(".");
+
+  // Extract digits from the remainder one at a time
+  while (digits-- > 0) {
+    remainder *= 10.0;
+    int toPrint = int(remainder);
+    Serial.print(toPrint);
+    remainder -= toPrint;
+  }
+}
+
 
